@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -10,9 +11,7 @@ import (
 	tmos "github.com/tendermint/tendermint/libs/os"
 	"github.com/tendermint/tendermint/node"
 	"github.com/tendermint/tendermint/p2p"
-	pvm "github.com/tendermint/tendermint/privval"
 	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/rpc/client/local"
 	"github.com/tendermint/tendermint/types"
 	tmtime "github.com/tendermint/tendermint/types/time"
 
@@ -30,6 +29,11 @@ import (
 
 	"github.com/evmos/ethermint/server"
 	evmtypes "github.com/evmos/ethermint/x/evm/types"
+
+	dymintconf "github.com/dymensionxyz/dymint/config"
+	dymintconv "github.com/dymensionxyz/dymint/conv"
+	dymintnode "github.com/dymensionxyz/dymint/node"
+	rpcclient "github.com/dymensionxyz/dymint/rpc/client"
 )
 
 func startInProcess(cfg Config, val *Validator) error {
@@ -41,7 +45,7 @@ func startInProcess(cfg Config, val *Validator) error {
 		return err
 	}
 
-	nodeKey, err := p2p.LoadOrGenNodeKey(tmCfg.NodeKeyFile())
+	nodeKey, err := p2p.LoadOrGenNodeKey(tmCfg.PrivValidatorKeyFile())
 	if err != nil {
 		return err
 	}
@@ -49,15 +53,36 @@ func startInProcess(cfg Config, val *Validator) error {
 	app := cfg.AppConstructor(*val)
 
 	genDocProvider := node.DefaultGenesisDocProviderFunc(tmCfg)
-	tmNode, err := node.NewNode(
-		tmCfg,
-		pvm.LoadOrGenFilePV(tmCfg.PrivValidatorKeyFile(), tmCfg.PrivValidatorStateFile()),
-		nodeKey,
+	// node key in optimint format
+	oNodeKey, err := dymintconv.GetNodeKey(nodeKey)
+	if err != nil {
+		return err
+	}
+	genesis, err := genDocProvider()
+	if err != nil {
+		return err
+	}
+	nodeConfig := dymintconf.NodeConfig{}
+	err = nodeConfig.GetViperConfig(val.Ctx.Viper)
+	if err != nil {
+		return err
+	}
+	dymintconv.GetNodeConfig(&nodeConfig, tmCfg)
+	err = dymintconv.TranslateAddresses(&nodeConfig)
+	if err != nil {
+		return err
+	}
+	nodeConfig.DALayer = "mock"
+	nodeConfig.Aggregator = true
+	nodeConfig.BlockTime = 1 * time.Second
+	tmNode, err := dymintnode.NewNode(
+		context.Background(),
+		nodeConfig,
+		oNodeKey,
+		oNodeKey,
 		proxy.NewLocalClientCreator(app),
-		genDocProvider,
-		node.DefaultDBProvider,
-		node.DefaultMetricsProvider(tmCfg.Instrumentation),
-		logger.With("module", val.Moniker),
+		genesis,
+		logger,
 	)
 	if err != nil {
 		return err
@@ -70,7 +95,7 @@ func startInProcess(cfg Config, val *Validator) error {
 	val.tmNode = tmNode
 
 	if val.RPCAddress != "" {
-		val.RPCClient = local.New(tmNode)
+		val.RPCClient = rpcclient.NewClient(tmNode)
 	}
 
 	// We'll need a RPC client if the validator exposes a gRPC or REST endpoint.

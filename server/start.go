@@ -23,9 +23,7 @@ import (
 	tmos "github.com/tendermint/tendermint/libs/os"
 	"github.com/tendermint/tendermint/node"
 	"github.com/tendermint/tendermint/p2p"
-	pvm "github.com/tendermint/tendermint/privval"
 	"github.com/tendermint/tendermint/proxy"
-	"github.com/tendermint/tendermint/rpc/client/local"
 	dbm "github.com/tendermint/tm-db"
 
 	"github.com/cosmos/cosmos-sdk/server/rosetta"
@@ -44,6 +42,11 @@ import (
 	ethdebug "github.com/evmos/ethermint/rpc/namespaces/ethereum/debug"
 	"github.com/evmos/ethermint/server/config"
 	srvflags "github.com/evmos/ethermint/server/flags"
+
+	dymintconf "github.com/dymensionxyz/dymint/config"
+	dymintconv "github.com/dymensionxyz/dymint/conv"
+	dymintnode "github.com/dymensionxyz/dymint/node"
+	dymintrpc "github.com/dymensionxyz/dymint/rpc"
 )
 
 // StartCmd runs the service passed in, either stand-alone or in-process with
@@ -96,7 +99,7 @@ which accepts a path for the resulting pprof file.
 
 			withTM, _ := cmd.Flags().GetBool(srvflags.WithTendermint)
 			if !withTM {
-				serverCtx.Logger.Info("starting ABCI without Tendermint")
+				serverCtx.Logger.Info("starting ABCI without Dymint")
 				return startStandAlone(serverCtx, appCreator)
 			}
 
@@ -111,7 +114,7 @@ which accepts a path for the resulting pprof file.
 				}
 			}
 
-			serverCtx.Logger.Info("starting ABCI with Tendermint")
+			serverCtx.Logger.Info("starting ABCI with Dymint")
 
 			// amino is needed here for backwards compatibility of REST routes
 			err = startInProcess(serverCtx, clientCtx, appCreator)
@@ -177,6 +180,7 @@ which accepts a path for the resulting pprof file.
 
 	// add support for all Tendermint-specific command line options
 	tcmd.AddNodeFlags(cmd)
+	dymintconf.AddFlags(cmd)
 	return cmd
 }
 
@@ -227,6 +231,8 @@ func startStandAlone(ctx *server.Context, appCreator types.AppCreator) error {
 
 // legacyAminoCdc is used for the legacy REST API
 func startInProcess(ctx *server.Context, clientCtx client.Context, appCreator types.AppCreator) (err error) {
+	fmt.Println("11111111111")
+
 	cfg := ctx.Config
 	home := cfg.RootDir
 	logger := ctx.Logger
@@ -299,17 +305,49 @@ func startInProcess(ctx *server.Context, clientCtx client.Context, appCreator ty
 		return err
 	}
 
+	privValKey, err := p2p.LoadOrGenNodeKey(cfg.PrivValidatorKeyFile())
+	if err != nil {
+		return err
+	}
+
 	genDocProvider := node.DefaultGenesisDocProviderFunc(cfg)
-	tmNode, err := node.NewNode(
-		cfg,
-		pvm.LoadOrGenFilePV(cfg.PrivValidatorKeyFile(), cfg.PrivValidatorStateFile()),
-		nodeKey,
+
+	// keys in dymint format
+	p2pKey, err := dymintconv.GetNodeKey(nodeKey)
+	if err != nil {
+		return err
+	}
+	signingKey, err := dymintconv.GetNodeKey(privValKey)
+	if err != nil {
+		return err
+	}
+	genesis, err := genDocProvider()
+	if err != nil {
+		return err
+	}
+	nodeConfig := dymintconf.NodeConfig{}
+	err = nodeConfig.GetViperConfig(ctx.Viper)
+	if err != nil {
+		return err
+	}
+	dymintconv.GetNodeConfig(&nodeConfig, cfg)
+	err = dymintconv.TranslateAddresses(&nodeConfig)
+	if err != nil {
+		return err
+	}
+
+	tmNode, err := dymintnode.NewNode(
+		context.Background(),
+		nodeConfig,
+		p2pKey,
+		signingKey,
 		proxy.NewLocalClientCreator(app),
-		genDocProvider,
-		node.DefaultDBProvider,
-		node.DefaultMetricsProvider(cfg.Instrumentation),
-		ctx.Logger.With("server", "node"),
+		genesis,
+		ctx.Logger,
 	)
+
+	srv := dymintrpc.NewServer(tmNode, cfg.RPC, ctx.Logger)
+	err = srv.Start()
 	if err != nil {
 		logger.Error("failed init node", "error", err.Error())
 		return err
@@ -324,7 +362,8 @@ func startInProcess(ctx *server.Context, clientCtx client.Context, appCreator ty
 	// service if API or gRPC or JSONRPC is enabled, and avoid doing so in the general
 	// case, because it spawns a new local tendermint RPC client.
 	if config.API.Enable || config.GRPC.Enable || config.JSONRPC.Enable {
-		clientCtx = clientCtx.WithClient(local.New(tmNode))
+		fmt.Println(222222)
+		clientCtx = clientCtx.WithClient(srv.Client())
 
 		app.RegisterTxService(clientCtx)
 		app.RegisterTendermintService(clientCtx)
