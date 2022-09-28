@@ -231,8 +231,6 @@ func startStandAlone(ctx *server.Context, appCreator types.AppCreator) error {
 
 // legacyAminoCdc is used for the legacy REST API
 func startInProcess(ctx *server.Context, clientCtx client.Context, appCreator types.AppCreator) (err error) {
-	fmt.Println("11111111111")
-
 	cfg := ctx.Config
 	home := cfg.RootDir
 	logger := ctx.Logger
