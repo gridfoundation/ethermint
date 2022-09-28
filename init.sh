@@ -5,10 +5,6 @@ CHAINID="ethermint_9000-1"
 MONIKER="localtestnet"
 KEYRING="test"
 KEYALGO="eth_secp256k1"
-LOGLEVEL="info"
-# to trace evm
-TRACE="--trace"
-# TRACE=""
 
 # validate dependencies are installed
 command -v jq > /dev/null 2>&1 || { echo >&2 "jq not installed. More info: https://stedolan.github.io/jq/download/"; exit 1; }
@@ -95,4 +91,6 @@ ethermintd start --dymint.aggregator true \
   --minimum-gas-prices=0.0001aphoton\
   --dymint.block_batch_size 1000 \
   --dymint.namespace_id 000000000000FFFF \
-  --dymint.block_time 0.5s
+  --dymint.block_time 0.5s \
+  --json-rpc.api eth,txpool,personal,net,debug,web3,miner \
+  --api.enable
